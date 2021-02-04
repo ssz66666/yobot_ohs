@@ -61,7 +61,7 @@ class ClanBattle:
         '查4': 24,
         '查5': 25,
         '查尾': 26,
-        '放弃出刀': 27,
+        '放弃': 27,
     }
 
     Server = {
@@ -1528,16 +1528,10 @@ class ClanBattle:
             _logger.info('群聊 成功 {} {} {}'.format(user_id, group_id, cmd))
             return '已取消'+event
         elif match_num == 14:  # 解锁
-            match = re.match(r'^解锁 *(?:\[CQ:at,qq=(\d+)\])? *$', cmd)
-            if match:
-                numF = 1
-                if match.group(1):
-                    numF = 2
-                    user_id=int(match.group(1))
-            else:
+            if cmd != '解锁':
                 return
             try:
-                boss_status = self.cancel_application(group_id, user_id, numF)
+                boss_status = self.cancel_application(group_id, user_id, 1)
             except ClanBattleError as e:
                 _logger.info('群聊 失败 {} {} {}'.format(user_id, group_id, cmd))
                 return str(e)
@@ -1628,7 +1622,6 @@ class ClanBattle:
                     if r['message'] is not None:
                         reply += '：' + r['message']
                 return reply
-
         elif match_num == 27:  # 放弃出刀
             match = re.match(r'^放弃出刀 *(?:\[CQ:at,qq=(\d+)\])? *$', cmd)
             if match:
