@@ -141,6 +141,17 @@ class User_box(_BaseModel):
     class Meta:
         primary_key = CompositeKey('qqid', 'chid')
 
+class Clan_boss_multiplayersports(_BaseModel):
+    group_id = BigIntegerField()
+    challenging_member_qq_id = BigIntegerField(null=True)
+    challenging_start_time = BigIntegerField(default=0) 
+    challenging_comment = TextField(null=True) 
+	
+    class Meta:
+        primary_key = CompositeKey('group_id', 'challenging_member_qq_id')
+        indexes = (		
+            (('group_id','challenging_member_qq_id'),False),
+        )
 
 class DB_schema(_BaseModel):
     key = CharField(max_length=64, primary_key=True)
@@ -163,11 +174,16 @@ def init(sqlite_filename):
     else:
         old_version = int(DB_schema.get(key='version').value)
 
+    if Clan_boss_multiplayersports.table_exists():
+        Clan_boss_multiplayersports.drop_table()
+    if not Clan_boss_multiplayersports.table_exists():
+        Clan_boss_multiplayersports.create_table()
     if not User.table_exists():
         Admin_key.create_table()
         User.create_table()
         User_login.create_table()
         Clan_group.create_table()
+        Clan_boss_multiplayersports.create_table()
         Clan_member.create_table()
         Clan_challenge.create_table()
         Clan_subscribe.create_table()

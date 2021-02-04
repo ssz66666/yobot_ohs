@@ -16,7 +16,7 @@ from quart import (Quart, jsonify, make_response, redirect, request, session,
 from ..templating import render_template
 from ..web_util import async_cached_func
 from ..ybdata import (Clan_challenge, Clan_group, Clan_member, Clan_subscribe,
-                      User)
+                      User,Clan_boss_multiplayersports)
 from .exception import (
     ClanBattleError, GroupError, GroupNotExist, InputError, UserError,
     UserNotInGroup)
@@ -61,6 +61,7 @@ class ClanBattle:
         '查4': 24,
         '查5': 25,
         '查尾': 26,
+        '放弃出刀': 27,
     }
 
     Server = {
@@ -319,7 +320,8 @@ class ClanBattle:
         # refresh member list
         self.get_member_list(group_id, nocache=True)
         return delete_count
-
+    
+    #boss 状态
     def boss_status_summary(self, group_id: Groupid) -> str:
         """
         get a summary of boss status
@@ -334,6 +336,7 @@ class ClanBattle:
             f'现在{group.boss_cycle}周目，{group.boss_num}号boss\n'
             f'生命值{group.boss_health:,}'
         )
+        '''
         if group.challenging_member_qq_id is not None:
             action = '正在挑战' if group.boss_lock_type == 1 else '锁定了'
             boss_summary += '\n{}{}boss'.format(
@@ -341,8 +344,29 @@ class ClanBattle:
                 or group.challenging_member_qq_id,
                 action,
             )
-            if group.boss_lock_type != 1:
-                boss_summary += '\n留言：'+group.challenging_comment
+        '''
+        bossMultiplaySet = Clan_boss_multiplayersports.select().where(Clan_boss_multiplayersports.group_id == group_id)
+        if bossMultiplaySet is not None:
+            count = Clan_boss_multiplayersports.select().where(Clan_boss_multiplayersports.group_id == group_id).count()
+            boss_summary += '\n当前{}人正在挑战boss'.format(count)
+            for bossMultiplay in bossMultiplaySet:
+                if bossMultiplay is not None:
+                    action = '正在挑战'
+                    boss_summary += '\n{}{}boss'.format(
+                self._get_nickname_by_qqid(bossMultiplay.challenging_member_qq_id)
+                or bossMultiplay.challenging_member_qq_id,
+                action,
+            )
+            
+            
+        if group.boss_lock_type != 1:
+            action = '锁定了'
+            boss_summary += '\n{}{}boss'.format(
+        self._get_nickname_by_qqid(group.challenging_member_qq_id)
+        or group.challenging_member_qq_id,
+        action,
+        )
+            boss_summary += '\n留言：'+group.challenging_comment
         return boss_summary
 
     def challenge(self,
@@ -452,8 +476,14 @@ class ClanBattle:
         else:
             group.boss_health -= damage
         # 如果当前正在挑战，则取消挑战
+        '''
         if user.qqid == group.challenging_member_qq_id:
             group.challenging_member_qq_id = None
+        '''
+        Clan_boss_multiplayersports.delete().where(
+            Clan_boss_multiplayersports.group_id == group_id,
+            Clan_boss_multiplayersports.challenging_member_qq_id == qqid,
+        ).execute()
         # 如果当前正在挂树，则取消挂树
         Clan_subscribe.delete().where(
             Clan_subscribe.gid == group_id,
@@ -789,10 +819,18 @@ class ClanBattle:
             if boss_num == 0:
                 raise UserError('您已经在树上了')
             raise UserError('您已经预约过了')
+        '''   
         if (boss_num == 0 and group.challenging_member_qq_id == qqid):
             # 如果挂树时当前正在挑战，则取消挑战
             group.challenging_member_qq_id = None
             group.save()
+        '''    
+        # 如果挂树时当前正在挑战，则取消挑战
+        if (boss_num == 0):
+            Clan_boss_multiplayersports.delete().where(
+                Clan_boss_multiplayersports.group_id == group_id,
+                Clan_boss_multiplayersports.challenging_member_qq_id == qqid,
+            ).execute()
         subscribe = Clan_subscribe.create(
             gid=group_id,
             qqid=qqid,
@@ -872,7 +910,13 @@ class ClanBattle:
                 group_id=group_id,
                 message='boss已被击败\n'+'\n'.join(notice),
             ))
+            #清除正在出刀
+            Clan_boss_multiplayersports.delete().where(
+                    Clan_boss_multiplayersports.group_id == group_id
+                ).execute()
 
+    
+    # 申请出刀
     def apply_for_challenge(self,
                             group_id: Groupid,
                             qqid: QQid,
@@ -893,8 +937,35 @@ class ClanBattle:
         user = User.get_or_none(qqid=qqid)
         if user is None:
             raise UserNotInGroup
+        if group.boss_lock_type != 1:
+            nik = self._get_nickname_by_qqid(
+                group.challenging_member_qq_id,
+            ) or group.challenging_member_qq_id
+            action = '锁定了,'
+            msg = f'申请失败, 当前boss已经被{nik}{action}\n留言：{group.challenging_comment}'
+            raise GroupError(msg)
+        bossMultiplay = Clan_boss_multiplayersports.get_or_none(group_id=group_id,challenging_member_qq_id=qqid)
+        if (bossMultiplay is not None) and (appli_type ==1 ):
+            nik = self._get_nickname_by_qqid(
+                bossMultiplay.challenging_member_qq_id,
+            ) or bossMultiplay.challenging_member_qq_id
+            action = ',您正在挑战'
+            msg = f'申请失败, {nik}{action}boss'
+            raise GroupError(msg)
+        if (bossMultiplay is None) and (appli_type ==1 ):
+            bossMultiplay = Clan_boss_multiplayersports.create(group_id=group_id,challenging_member_qq_id=qqid)
+            bossMultiplay.challenging_start_time = int(time.time())
+            bossMultiplay.challenging_member_qq_id = qqid
+            bossMultiplay.challenging_comment = extra_msg
+            bossMultiplay.save()   
+            
         if (appli_type != 1) and (extra_msg is None):
             raise InputError('锁定boss时必须留言')
+        if (appli_type != 1) and (extra_msg is not None):
+            group.challenging_member_qq_id = qqid
+            group.challenging_start_time = int(time.time())
+            group.challenging_comment = extra_msg
+        '''
         if group.challenging_member_qq_id is not None:
             nik = self._get_nickname_by_qqid(
                 group.challenging_member_qq_id,
@@ -904,15 +975,22 @@ class ClanBattle:
             if group.boss_lock_type != 1:
                 msg += '\n留言：'+group.challenging_comment
             raise GroupError(msg)
+        
         group.challenging_member_qq_id = qqid
         group.challenging_start_time = int(time.time())
         group.challenging_comment = extra_msg
+        group.boss_lock_type = appli_type
+        group.save()
+        '''
+        
+        
         group.boss_lock_type = appli_type
         group.save()
 
         nik = self._get_nickname_by_qqid(qqid) or qqid
         info = (f'{nik}已开始挑战boss' if appli_type == 1 else
                 f'{nik}锁定了boss\n留言：{extra_msg}')
+        
         status = BossStatus(
             group.boss_cycle,
             group.boss_num,
@@ -926,19 +1004,25 @@ class ClanBattle:
         self._boss_status[group_id] = asyncio.get_event_loop().create_future()
         return status
 
-    def cancel_application(self, group_id: Groupid, qqid: QQid) -> BossStatus:
+    def cancel_application(self, group_id: Groupid, qqid: QQid, purpose: int) -> BossStatus:
         """
         cancel a application of boss challenge 3 minutes after the challenge starts.
-
+        
+        update:
+            除了管理员只能取消自己的出刀申请
+        
         Args:
             group_id: group id
             qqid: qq id of the canceler
+            purpose: 1是解锁 2是取消出刀
             force_cancel: ignore the 3-minutes restriction
         """
+        _logger.info('进来了 {} {} {}'.format(qqid, group_id, purpose))
         group = Clan_group.get_or_none(group_id=group_id)
         if group is None:
             raise GroupNotExist
-        if group.challenging_member_qq_id is None:
+        bossMultiplaySet = Clan_boss_multiplayersports.select().where(Clan_boss_multiplayersports.group_id == group_id)
+        if (group.challenging_member_qq_id is None) and (bossMultiplaySet is None):
             raise GroupError('boss没有锁定')
         user = User.get_or_create(
             qqid=qqid,
@@ -946,6 +1030,7 @@ class ClanBattle:
                 'clan_group_id': group_id,
             }
         )[0]
+        '''
         if (group.challenging_member_qq_id != qqid) and (user.authority_group >= 100):
             challenge_duration = (int(time.time())
                                   - group.challenging_start_time)
@@ -959,9 +1044,31 @@ class ClanBattle:
                     ('锁定了boss\n留言：'+group.challenging_comment)
                 )
                 raise GroupError(msg)
-        group.challenging_member_qq_id = None
-        group.save()
-
+        '''
+        is_challenge = (group.boss_lock_type == 1)
+        # 权限不够不能解锁锁定的boss
+        if (user.authority_group >= 100) and (not is_challenge):
+            challenge_duration = (int(time.time())
+                                  - group.challenging_start_time)
+            nik = self._get_nickname_by_qqid(
+                    group.challenging_member_qq_id,
+                ) or group.challenging_member_qq_id
+            msg = f'失败，{nik}在{challenge_duration}秒前'+(
+                '开始挑战boss' if is_challenge else
+                ('锁定了boss\n留言：'+group.challenging_comment)
+            )
+            raise GroupError(msg)
+        # 取消出刀
+        if (is_challenge) and (purpose==2):
+            Clan_boss_multiplayersports.delete().where(
+                    Clan_boss_multiplayersports.group_id == group_id,
+                    Clan_boss_multiplayersports.challenging_member_qq_id == qqid,
+                ).execute()
+        # unlock
+        if (user.authority_group < 100) and (not is_challenge) and (purpose == 1):
+            group.challenging_member_qq_id = None
+            group.boss_lock_type = 1
+            group.save()
         status = BossStatus(
             group.boss_cycle,
             group.boss_num,
@@ -978,7 +1085,7 @@ class ClanBattle:
     def save_slot(self, group_id: Groupid, qqid: QQid, todaystatus: bool = True, only_check: bool = False):
         """
         record today's save slot
-
+        
         Args:
             group_id: group id
             qqid: qqid of member who do the record
@@ -999,9 +1106,15 @@ class ClanBattle:
             membership.last_save_slot = today
 
             # 如果当前正在挑战，则取消挑战
+            '''
             if (group.challenging_member_qq_id == qqid):
                 group.challenging_member_qq_id = None
                 group.save()
+            '''
+            Clan_boss_multiplayersports.delete().where(
+                Clan_boss_multiplayersports.group_id == group_id,
+                Clan_boss_multiplayersports.challenging_member_qq_id == qqid,
+            ).execute()
             # 如果当前正在挂树，则取消挂树
             Clan_subscribe.delete().where(
                 Clan_subscribe.gid == group_id,
@@ -1369,9 +1482,12 @@ class ClanBattle:
             _logger.info('群聊 成功 {} {} {}'.format(user_id, group_id, cmd))
             return '已挂树'
         elif match_num == 12:  # 申请/锁定
-            if cmd == '申请出刀':
+            match = re.match(r'^申请出刀 *(?:\[CQ:at,qq=(\d+)\])? *$', cmd)
+            if match:
                 appli_type = 1
                 extra_msg = None
+                if match.group(1):
+                    user_id=int(match.group(1))
             elif cmd == '锁定':
                 return '锁定时请留言'
             else:
@@ -1412,10 +1528,16 @@ class ClanBattle:
             _logger.info('群聊 成功 {} {} {}'.format(user_id, group_id, cmd))
             return '已取消'+event
         elif match_num == 14:  # 解锁
-            if cmd != '解锁':
+            match = re.match(r'^解锁 *(?:\[CQ:at,qq=(\d+)\])? *$', cmd)
+            if match:
+                numF = 1
+                if match.group(1):
+                    numF = 2
+                    user_id=int(match.group(1))
+            else:
                 return
             try:
-                boss_status = self.cancel_application(group_id, user_id)
+                boss_status = self.cancel_application(group_id, user_id, numF)
             except ClanBattleError as e:
                 _logger.info('群聊 失败 {} {} {}'.format(user_id, group_id, cmd))
                 return str(e)
@@ -1506,6 +1628,23 @@ class ClanBattle:
                     if r['message'] is not None:
                         reply += '：' + r['message']
                 return reply
+
+        elif match_num == 27:  # 放弃出刀
+            match = re.match(r'^放弃出刀 *(?:\[CQ:at,qq=(\d+)\])? *$', cmd)
+            if match:
+                if match.group(1):
+                    user_id=int(match.group(1))
+            else:
+                return
+            # if cmd != '解锁':
+            #     return
+            try:
+                boss_status = self.cancel_application(group_id, user_id, 2)
+            except ClanBattleError as e:
+                _logger.info('群聊 失败 {} {} {}'.format(user_id, group_id, cmd))
+                return str(e)
+            _logger.info('群聊 成功 {} {} {}'.format(user_id, group_id, cmd))
+            return str(boss_status)
 
 
     def register_routes(self, app: Quart):
